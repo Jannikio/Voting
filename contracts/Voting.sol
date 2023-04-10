@@ -2,6 +2,20 @@
 
 pragma solidity ^0.8.0;
 
+error Voting__NotOwner();
+error Voting__NotRegistered();
+error Voting__OutOfBound();
+error Voting__RegistrationDeadlinePassed();
+error Voting__NotRegisteredForProposal();
+error Voting__AlreadyVoted();
+error Voting__VotingHasNotStarted();
+error Voting__VotingOver();
+error Voting__SelfDelegationIllegal();
+error Voting__DelegateMoreThanWeight();
+error Voting__LoopInDelegation();
+error Voting__VotingNotOver();
+error Voting__ProposalAlreadyFinalized();
+
 contract Voting {
     struct Voter {
         bool voted;
@@ -35,12 +49,16 @@ contract Voting {
     }
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function.");
+        if (msg.sender != owner) {
+            revert Voting__NotOwner();
+        }
         _;
     }
 
     modifier onlyRegistered() {
-        require(voters[msg.sender].isRegistered, "Only registered voters can call this function.");
+        if (voters[msg.sender].isRegistered != true) {
+            revert Voting__NotRegistered();
+        }
         _;
     }
 
@@ -68,9 +86,13 @@ contract Voting {
     }
 
     function registerForProposal(uint256 _proposalIndex) public onlyRegistered {
-        require(_proposalIndex < proposals.length, "Invalid proposal index.");
+        if (_proposalIndex > proposals.length) {
+            revert Voting__OutOfBound();
+        }
         Proposal storage proposal = proposals[_proposalIndex];
-        require(block.timestamp < proposal.registrationDeadline, "Registration deadline has passed.");
+        if (block.timestamp > proposal.registrationDeadline) {
+            revert Voting__RegistrationDeadlinePassed();
+        }
         Voter storage voter = voters[msg.sender];
         voter.registeredProposals[_proposalIndex] = true;
         emit ProposalRegistered(_proposalIndex, msg.sender);
@@ -78,12 +100,20 @@ contract Voting {
 
     function vote(uint256 _proposalIndex) public onlyRegistered {
         Voter storage voter = voters[msg.sender];
-        require(voter.registeredProposals[_proposalIndex], "You are not registered for this proposal.");
-        require(!voter.voted, "Already voted.");
+        if (voter.registeredProposals[_proposalIndex] != true) {
+            revert Voting__NotRegisteredForProposal();
+        }
+        if (voter.voted == true) {
+            revert Voting__AlreadyVoted();
+        }
 
         Proposal storage proposal = proposals[_proposalIndex];
-        require(block.timestamp > proposal.registrationDeadline, "Voting has not started.");
-        require(block.timestamp < proposal.deadline, "Voting has ended.");
+        if (block.timestamp < proposal.registrationDeadline) {
+            revert Voting__VotingHasNotStarted();
+        }
+        if (block.timestamp > proposal.deadline) {
+            revert Voting__VotingOver();
+        }
         voter.voted = true;
         proposal.voteCount += voter.weight;
 
@@ -92,31 +122,45 @@ contract Voting {
 
     function delegate(address _to, uint256 _proposalIndex, uint256 _portion) public onlyRegistered {
         Voter storage sender = voters[msg.sender];
-        require(!sender.voted, "Already voted.");
-        require(_to != msg.sender, "Self-delegation is disallowed.");
-        require(sender.weight >= _portion, "You cannot delegate more than your weight.");
+        if (sender.voted == true) {
+            revert Voting__AlreadyVoted();
+        }
+        if (_to == msg.sender) {
+            revert Voting__SelfDelegationIllegal();
+        }
+        if (sender.weight < _portion) {
+            revert Voting__DelegateMoreThanWeight();
+        }
 
         while (voters[_to].delegate != address(0) && voters[_to].delegate != msg.sender) {
             _to = voters[_to].delegate;
         }
 
-        require (_to != msg.sender, "Found loop in delegation.");
+        if (_to == msg.sender) {
+            revert Voting__LoopInDelegation();
+        }
 
         sender.weight -= _portion;
         sender.delegatedWeight[_proposalIndex] += _portion;
 
-        Voter storage delegate = voters[_to];
-        if(delegate.voted) {
+        Voter storage delegate_ = voters[_to];
+        if(delegate_.voted) {
             proposals[_proposalIndex].voteCount += _portion;
         } else {
-            delegate.weight += _portion;
+            delegate_.weight += _portion;
         }
     }
 
     function finalizeProposal(uint256 _proposalIndex) public onlyRegistered {
-        require(_proposalIndex < proposals.length, "Invalid proposal index.");
-        require(block.timestamp > proposals[_proposalIndex].deadline, "Voting has not ended.");
-        require(!proposals[_proposalIndex].finalized, "Proposal has already been finalized.");
+        if (_proposalIndex > proposals.length) {
+            revert Voting__OutOfBound();
+        }
+        if (block.timestamp < proposals[_proposalIndex].deadline) {
+            revert Voting__VotingNotOver();
+        }
+        if (proposals[_proposalIndex].finalized == true) {
+            revert Voting__ProposalAlreadyFinalized();
+        }
         proposals[_proposalIndex].finalized = true;
         emit ProposalFinalized(_proposalIndex);
     }
@@ -126,18 +170,22 @@ contract Voting {
     }
 
     function getProposal(uint256 _proposalIndex) public view returns (string memory name, uint256 voteCount, uint256 deadline, uint256 registrationDeadline, bool finalized) {
-        require(_proposalIndex < proposals.length, "Invalid proposal index.");
+        if (_proposalIndex > proposals.length) {
+            revert Voting__OutOfBound();
+        }
         Proposal storage proposal = proposals[_proposalIndex];
         return (proposal.name, proposal.voteCount, proposal.deadline, proposal.registrationDeadline, proposal.finalized);
     }
 
-    function getVoter(address _voter) public view returns (bool voted, bool isRegistered, uint256 weight, address delegate) {
+    function getVoter(address _voter) public view returns (bool voted, bool isRegistered, uint256 weight, address delegateTo) {
         Voter storage voter = voters[_voter];
         return (voter.voted, voter.isRegistered, voter.weight, voter.delegate);
     }
 
     function isRegisteredForProposal(address _voter, uint256 _proposalIndex) public view returns (bool) {
-        require(_proposalIndex < proposals.length, "Invalid proposal index.");
+        if (_proposalIndex > proposals.length) {
+            revert Voting__OutOfBound();
+        }
         return voters[_voter].registeredProposals[_proposalIndex];
     }
 }
